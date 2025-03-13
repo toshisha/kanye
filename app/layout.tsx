@@ -3,8 +3,8 @@ import { inter } from './fonts'
 import { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'mix by mafwbh',
-  description: 'mixed songs',
+  title: 'kanye mix by mafwbh',
+  description: 'kanye mixed songs',
   icons: {
     icon: '/icon.png',
   },
