@@ -3,9 +3,11 @@
 import type React from "react"
 
 import { useState, useRef, useEffect, useCallback } from "react"
-import { Search, Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Music } from "lucide-react"
+import { Search, Shuffle, SkipBack, SkipForward, Repeat, Music, Volume2, VolumeX, Volume1 } from "lucide-react" // Import Volume icons
 import Image from "next/image"
-import { AnimatedVolumeControl } from "./animated-volume-control"
+import { VolumeSlider } from "./volume-slider" // Import the refactored VolumeSlider
+// import { GlassCard } from "@developer-hub/liquid-glass" // Removed GlassCard import
+import { cn } from "@/lib/utils"
 
 interface Track {
   id: number
@@ -18,7 +20,6 @@ interface Track {
 
 export default function MusicPlayer() {
   const [tracks, setTracks] = useState<Track[]>([])
-  const [originalTracks, setOriginalTracks] = useState<Track[]>([])
   const [error, setError] = useState<string | null>(null)
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -27,16 +28,9 @@ export default function MusicPlayer() {
   const [volume, setVolume] = useState(1)
   const [isShuffled, setIsShuffled] = useState(false)
   const [isAutoplay, setIsAutoplay] = useState(false)
+  const [isVolumeSliderOpen, setIsVolumeSliderOpen] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const progressRef = useRef<HTMLDivElement>(null)
-
-  const [crossfadeDuration, setCrossfadeDuration] = useState(3) // 3 seconds default
-  const [isCrossfadeEnabled, setIsCrossfadeEnabled] = useState(true)
-  const [nextTrack, setNextTrack] = useState<Track | null>(null)
-  const [shuffleQueue, setShuffleQueue] = useState<Track[]>([])
-  const [shuffleIndex, setShuffleIndex] = useState(0)
-  const nextAudioRef = useRef<HTMLAudioElement | null>(null)
-  const crossfadeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     const fetchTracks = async () => {
@@ -46,13 +40,11 @@ export default function MusicPlayer() {
         const data = await res.json()
         if (!Array.isArray(data)) throw new Error("Invalid data format")
         setTracks(data)
-        setOriginalTracks(data)
         setError(null)
       } catch (err) {
         console.error("Error fetching tracks:", err)
         setError("Failed to load tracks. Please try again later.")
         setTracks([])
-        setOriginalTracks([])
       }
     }
 
@@ -62,7 +54,9 @@ export default function MusicPlayer() {
   useEffect(() => {
     if (audioRef.current) {
       const updateProgress = () => {
-        setCurrentTime(audioRef.current!.currentTime)
+        if (audioRef.current) {
+          setCurrentTime(audioRef.current.currentTime)
+        }
       }
       audioRef.current.addEventListener("timeupdate", updateProgress)
       return () => {
@@ -99,124 +93,22 @@ export default function MusicPlayer() {
   }, [])
 
   const toggleShuffle = useCallback(() => {
-    setIsShuffled((prev) => {
-      const newShuffled = !prev
+    setIsShuffled((prev) => !prev)
+    setTracks((prev) => (isShuffled ? [...prev].sort((a, b) => a.id - b.id) : shuffleArray(prev)))
+  }, [isShuffled, shuffleArray])
 
-      if (newShuffled) {
-        // Enable shuffle: create shuffled version
-        const shuffled = shuffleArray(originalTracks)
-        setTracks(shuffled)
-        setShuffleQueue(shuffled)
-        setShuffleIndex(0)
-      } else {
-        // Disable shuffle: restore original order
-        setTracks(originalTracks)
-        setShuffleQueue([])
-        setShuffleIndex(0)
-      }
+  const toggleAutoplay = useCallback(() => {
+    setIsAutoplay((prev) => !prev)
+  }, [])
 
-      return newShuffled
-    })
-  }, [shuffleArray, originalTracks])
-
-  const getNextTrack = useCallback(
-    (current: Track | null = currentTrack): Track | null => {
-      if (!current || tracks.length === 0) return null
-
-      if (isShuffled && shuffleQueue.length > 0) {
-        const nextIndex = (shuffleIndex + 1) % shuffleQueue.length
-        return shuffleQueue[nextIndex] || null
-      } else {
-        const currentIndex = tracks.findIndex((track) => track.id === current.id)
-        const nextIndex = (currentIndex + 1) % tracks.length
-        return tracks[nextIndex] || null
-      }
-    },
-    [currentTrack, tracks, isShuffled, shuffleQueue, shuffleIndex],
-  )
-
-  const preloadNextTrack = useCallback(() => {
-    const next = getNextTrack()
-    setNextTrack(next)
-
-    if (next && nextAudioRef.current) {
-      nextAudioRef.current.src = next.url
-      nextAudioRef.current.load()
+  const playTrack = useCallback((track: Track) => {
+    setCurrentTrack(track)
+    setIsPlaying(true)
+    if (audioRef.current) {
+      audioRef.current.src = track.url
+      audioRef.current.play()
     }
-  }, [getNextTrack])
-
-  const playTrack = useCallback(
-    (track: Track, skipCrossfade = false) => {
-      // Clear any existing crossfade timeout
-      if (crossfadeTimeoutRef.current) {
-        clearTimeout(crossfadeTimeoutRef.current)
-      }
-
-      setCurrentTrack(track)
-      setIsPlaying(true)
-
-      if (audioRef.current) {
-        if (!skipCrossfade && isCrossfadeEnabled && currentTrack && audioRef.current.src) {
-          // Start crossfade transition
-          const currentAudio = audioRef.current
-          const nextAudio = nextAudioRef.current
-
-          if (nextAudio && nextAudio.src === track.url) {
-            // Use preloaded track
-            nextAudio.volume = 0
-            nextAudio.currentTime = 0
-            nextAudio.play()
-
-            // Crossfade
-            const fadeSteps = 20
-            const fadeInterval = (crossfadeDuration * 1000) / fadeSteps
-            let step = 0
-
-            const fadeInterval_id = setInterval(() => {
-              step++
-              const progress = step / fadeSteps
-
-              currentAudio.volume = volume * (1 - progress)
-              nextAudio.volume = volume * progress
-
-              if (step >= fadeSteps) {
-                clearInterval(fadeInterval_id)
-                currentAudio.pause()
-                currentAudio.volume = volume
-
-                // Swap audio references
-                const tempRef = audioRef.current
-                audioRef.current = nextAudioRef.current
-                nextAudioRef.current = tempRef
-              }
-            }, fadeInterval)
-          } else {
-            // Fallback to normal play
-            audioRef.current.src = track.url
-            audioRef.current.volume = volume
-            audioRef.current.play()
-          }
-        } else {
-          // Normal play without crossfade
-          audioRef.current.src = track.url
-          audioRef.current.volume = volume
-          audioRef.current.play()
-        }
-      }
-
-      // Update shuffle index if in shuffle mode
-      if (isShuffled && shuffleQueue.length > 0) {
-        const trackIndex = shuffleQueue.findIndex((t) => t.id === track.id)
-        if (trackIndex !== -1) {
-          setShuffleIndex(trackIndex)
-        }
-      }
-
-      // Preload next track after a short delay
-      setTimeout(preloadNextTrack, 1000)
-    },
-    [currentTrack, volume, crossfadeDuration, isCrossfadeEnabled, isShuffled, shuffleQueue, preloadNextTrack],
-  )
+  }, [])
 
   const togglePlay = useCallback(() => {
     if (!currentTrack) return
@@ -229,32 +121,28 @@ export default function MusicPlayer() {
   }, [currentTrack, isPlaying])
 
   const playNext = useCallback(() => {
-    const next = getNextTrack()
-    if (next) {
-      playTrack(next)
+    if (!currentTrack || tracks.length === 0) return
+    const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id)
+    let nextIndex
+    if (isShuffled) {
+      nextIndex = Math.floor(Math.random() * tracks.length)
+    } else {
+      nextIndex = (currentIndex + 1) % tracks.length
     }
-  }, [getNextTrack, playTrack])
+    playTrack(tracks[nextIndex])
+  }, [currentTrack, tracks, isShuffled, playTrack])
 
   const playPrevious = useCallback(() => {
     if (!currentTrack || tracks.length === 0) return
-
-    let previousTrack: Track | null = null
-
-    if (isShuffled && shuffleQueue.length > 0) {
-      // In shuffle mode, go to previous in shuffle queue
-      const prevIndex = shuffleIndex - 1 >= 0 ? shuffleIndex - 1 : shuffleQueue.length - 1
-      previousTrack = shuffleQueue[prevIndex]
-      setShuffleIndex(prevIndex)
+    const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id)
+    let previousIndex
+    if (isShuffled) {
+      previousIndex = Math.floor(Math.random() * tracks.length)
     } else {
-      const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id)
-      const previousIndex = (currentIndex - 1 + tracks.length) % tracks.length
-      previousTrack = tracks[previousIndex]
+      previousIndex = (currentIndex - 1 + tracks.length) % tracks.length
     }
-
-    if (previousTrack) {
-      playTrack(previousTrack, true) // Skip crossfade for previous
-    }
-  }, [currentTrack, tracks, isShuffled, shuffleQueue, shuffleIndex, playTrack])
+    playTrack(tracks[previousIndex])
+  }, [currentTrack, tracks, isShuffled, playTrack])
 
   const handleProgressClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -285,81 +173,15 @@ export default function MusicPlayer() {
     }
   }, [isAutoplay, playNext])
 
-  const toggleAutoplay = useCallback(() => {
-    setIsAutoplay((prev) => !prev)
-  }, [])
-
-  // Setup crossfade trigger
-  useEffect(() => {
-    if (!audioRef.current || !currentTrack || !isCrossfadeEnabled) return
-
-    const audio = audioRef.current
-    const handleTimeUpdate = () => {
-      const timeLeft = audio.duration - audio.currentTime
-
-      if (timeLeft <= crossfadeDuration && timeLeft > crossfadeDuration - 0.1 && isAutoplay) {
-        // Start crossfade
-        const next = getNextTrack()
-        if (next && nextAudioRef.current && !crossfadeTimeoutRef.current) {
-          crossfadeTimeoutRef.current = setTimeout(() => {
-            if (nextAudioRef.current && next) {
-              nextAudioRef.current.src = next.url
-              nextAudioRef.current.volume = 0
-              nextAudioRef.current.currentTime = 0
-              nextAudioRef.current.play()
-
-              // Start fade
-              const fadeSteps = 20
-              const fadeInterval = (crossfadeDuration * 1000) / fadeSteps
-              let step = 0
-
-              const fadeInterval_id = setInterval(() => {
-                step++
-                const progress = step / fadeSteps
-
-                if (audioRef.current) audioRef.current.volume = volume * (1 - progress)
-                if (nextAudioRef.current) nextAudioRef.current.volume = volume * progress
-
-                if (step >= fadeSteps) {
-                  clearInterval(fadeInterval_id)
-                  // The track will end naturally and trigger handleTrackEnd
-                }
-              }, fadeInterval)
-            }
-          }, 100)
-        }
-      }
-    }
-
-    audio.addEventListener("timeupdate", handleTimeUpdate)
-    return () => {
-      audio.removeEventListener("timeupdate", handleTimeUpdate)
-      if (crossfadeTimeoutRef.current) {
-        clearTimeout(crossfadeTimeoutRef.current)
-        crossfadeTimeoutRef.current = null
-      }
-    }
-  }, [currentTrack, crossfadeDuration, isCrossfadeEnabled, isAutoplay, volume, getNextTrack])
-
-  // Minimalist crossfade icon component
-  const CrossfadeIcon = ({ className }: { className?: string }) => (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M3 12h6l3-9 3 9h6" />
-      <path d="M21 12h-6l-3 9-3-9H3" opacity="0.5" />
-    </svg>
-  )
+  const getVolumeIcon = () => {
+    if (volume === 0) return <VolumeX className="w-5 h-5" />
+    if (volume < 0.5) return <Volume1 className="w-5 h-5" />
+    return <Volume2 className="w-5 h-5" />
+  }
 
   return (
     <div className="flex flex-col h-screen bg-black text-white">
-      <header className="flex flex-col sm:flex-row items-center justify-between px-4 py-2 sm:h-16 border-b border-white/10">
+      <header className="flex flex-col sm:flex-row items-center justify-between px-4 py-2 sm:h-16 border-b border-white/10 flex-shrink-0">
         <div className="w-full sm:w-auto flex justify-center sm:justify-start mb-2 sm:mb-0">
           <Image src="/logo.svg" alt="MAFWBH logo" width={120} height={40} priority />
         </div>
@@ -375,9 +197,10 @@ export default function MusicPlayer() {
         </div>
       </header>
 
-      <div className="flex-1 p-4 overflow-hidden pb-36">
+      {/* Full screen song list - no bottom padding */}
+      <div className="flex-1 p-4 overflow-hidden">
         <div className="border border-white/10 rounded-md h-full flex flex-col">
-          <div className="grid grid-cols-[48px_48px_1fr_1fr_80px] gap-3 text-xs font-medium text-white/60 px-4 py-2 border-b border-white/10">
+          <div className="grid grid-cols-[48px_48px_1fr_1fr_80px] gap-3 text-xs font-medium text-white/60 px-4 py-2 border-b border-white/10 flex-shrink-0">
             <div className="text-center">#</div>
             <div></div>
             <div>Title</div>
@@ -386,8 +209,10 @@ export default function MusicPlayer() {
           </div>
 
           {filteredTracks.length === 0 ? (
-            <div className="text-center py-8 opacity-60">
-              {error ? <p className="text-sm">{error}</p> : <p className="text-sm">No songs found</p>}
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center opacity-60">
+                {error ? <p className="text-sm">{error}</p> : <p className="text-sm">No songs found</p>}
+              </div>
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto custom-scrollbar">
@@ -425,17 +250,55 @@ export default function MusicPlayer() {
         </div>
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 border-t border-white/10 bg-black/95 backdrop-blur supports-[backdrop-filter]:bg-black/60 p-4">
-        <div className="max-w-3xl mx-auto flex flex-col items-center gap-2">
-          <div className="w-full flex flex-col gap-1">
-            <div className="w-full flex justify-between text-[10px] text-white/60">
-              <span>{formatTime(currentTime)}</span>
-              <span>{currentTrack ? formatTime(currentTrack.duration) : "0:00"}</span>
+      {/* Fixed width floating control bar with custom liquid glass effect */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 w-full max-w-[480px]">
+        <div className="p-3 rounded-[30px] bg-white/10 backdrop-blur-lg border border-white/20 shadow-lg">
+          {/* Main control section */}
+          <div className="flex items-center justify-between mb-3">
+            {/* Left: Album art and track info - fixed width to prevent layout shift */}
+            <div className="flex items-center gap-3 w-64">
+              <div className="flex-shrink-0">
+                {currentTrack?.coverArt ? (
+                  <Image
+                    src={currentTrack.coverArt || "/placeholder.svg"}
+                    alt={`Cover for ${currentTrack.title}`}
+                    width={40}
+                    height={40}
+                    className="rounded-full"
+                  />
+                ) : (
+                  <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center">
+                    <Music className="w-4 h-4 text-white" />
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-white text-sm truncate">
+                  {currentTrack?.title || "No song selected"}
+                </div>
+                <div className="text-xs text-gray-400 truncate">{currentTrack?.artist || "Unknown artist"}</div>
+              </div>
             </div>
+
+            {/* Right: Play/Pause button - fixed width */}
+            <div className="flex-shrink-0 w-20 flex justify-end">
+              <button
+                onClick={togglePlay}
+                className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                  isPlaying ? "bg-red-500 hover:bg-red-600 text-white" : "bg-green-500 hover:bg-green-600 text-white"
+                }`}
+              >
+                {isPlaying ? "Pause" : "Play"}
+              </button>
+            </div>
+          </div>
+
+          {/* Progress bar - moved below song info */}
+          <div className="mb-3">
             <div
               ref={progressRef}
               onClick={handleProgressClick}
-              className="w-full bg-white/10 h-[2px] rounded-full overflow-hidden cursor-pointer relative"
+              className="w-full bg-white/10 h-0.5 rounded-full overflow-hidden cursor-pointer relative"
             >
               <div
                 className="bg-white h-full transition-all duration-100 ease-linear"
@@ -444,52 +307,67 @@ export default function MusicPlayer() {
             </div>
           </div>
 
-          <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-2">
-            <div className="w-full sm:w-1/3 flex items-center justify-center sm:justify-start">
-              {currentTrack && (
-                <div className="truncate text-center sm:text-left">
-                  <div className="font-medium truncate">{currentTrack.title}</div>
-                  <div className="text-sm opacity-60 truncate">{currentTrack.artist}</div>
-                </div>
-              )}
-            </div>
+          {/* Bottom control buttons or Volume Slider */}
+          <div className="flex items-center justify-center gap-4">
+            {/* Volume button always visible */}
+            <button
+              onClick={() => setIsVolumeSliderOpen(!isVolumeSliderOpen)}
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-all bg-black/50 backdrop-blur-sm text-gray-400 hover:bg-gray-600 hover:text-white"
+              aria-label="Toggle volume slider"
+            >
+              {getVolumeIcon()}
+            </button>
 
-            <div className="flex items-center gap-4">
-              <button
-                onClick={toggleShuffle}
-                className={`p-2 transition-opacity ${isShuffled ? "opacity-100" : "opacity-60 hover:opacity-100"}`}
-                title={`Shuffle ${isShuffled ? "enabled" : "disabled"}`}
-              >
-                <Shuffle className="w-5 h-5" />
-              </button>
-              <button onClick={playPrevious} className="p-2 opacity-60 hover:opacity-100 transition-opacity">
-                <SkipBack className="w-5 h-5" />
-              </button>
-              <button onClick={togglePlay} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors">
-                {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-              </button>
-              <button onClick={playNext} className="p-2 opacity-60 hover:opacity-100 transition-opacity">
-                <SkipForward className="w-5 h-5" />
-              </button>
-              <button
-                onClick={toggleAutoplay}
-                className={`p-2 transition-opacity ${isAutoplay ? "opacity-100" : "opacity-60 hover:opacity-100"}`}
-                title={`Autoplay ${isAutoplay ? "enabled" : "disabled"}`}
-              >
-                <Repeat className="w-5 h-5" />
-              </button>
-              <button
-                onClick={() => setIsCrossfadeEnabled((prev) => !prev)}
-                className={`p-2 transition-opacity ${isCrossfadeEnabled ? "opacity-100" : "opacity-60 hover:opacity-100"}`}
-                title={`Crossfade ${isCrossfadeEnabled ? "enabled" : "disabled"}`}
-              >
-                <CrossfadeIcon className="w-5 h-5" />
-              </button>
-            </div>
+            {/* Volume Slider */}
+            {isVolumeSliderOpen ? (
+              <div className="flex-1 flex justify-center items-center py-2 px-4 rounded-full bg-black/50 backdrop-blur-lg animate-in fade-in duration-200">
+                <VolumeSlider
+                  volume={volume}
+                  onVolumeChange={handleVolumeChange}
+                  onClose={() => setIsVolumeSliderOpen(false)}
+                />
+              </div>
+            ) : (
+              <>
+                {/* Shuffle button */}
+                <button
+                  onClick={toggleShuffle}
+                  className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center transition-all bg-black/50 backdrop-blur-sm text-gray-400 hover:bg-gray-600 hover:text-white",
+                    isShuffled && "bg-white/20 text-white backdrop-blur-sm",
+                  )}
+                >
+                  <Shuffle className="w-3.5 h-3.5" />
+                </button>
 
-            <div className="w-full sm:w-1/3 flex items-center justify-center sm:justify-end">
-              <AnimatedVolumeControl volume={volume} onVolumeChange={handleVolumeChange} />
-            </div>
+                {/* Previous button */}
+                <button
+                  onClick={playPrevious}
+                  className="w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-gray-400 hover:text-white transition-all"
+                >
+                  <SkipBack className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Next button */}
+                <button
+                  onClick={playNext}
+                  className="w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-gray-400 hover:text-white transition-all"
+                >
+                  <SkipForward className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Autoplay button */}
+                <button
+                  onClick={toggleAutoplay}
+                  className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center transition-all bg-black/50 backdrop-blur-sm text-gray-400 hover:bg-gray-600 hover:text-white",
+                    isAutoplay && "bg-white/20 text-white backdrop-blur-sm",
+                  )}
+                >
+                  <Repeat className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -500,7 +378,6 @@ export default function MusicPlayer() {
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
       />
-      <audio ref={nextAudioRef} preload="none" />
     </div>
   )
 }
